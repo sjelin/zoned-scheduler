@@ -1,0 +1,27 @@
+{
+  "name": "naive-scheduler",
+  "version": "0.1.0",
+  "description": "A basic scheduler to run asynchronous functions in order.",
+  "scripts": {
+    "prepublish": "gulp prepublish",
+    "test": "gulp test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/sjelin/naive-scheduler.git"
+  },
+  "main": "lib/index.js",
+  "author": "Sammy Jelin <sjelin@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jasmine": "^2.2.32",
+    "@types/minimatch": "^2.0.28",
+    "@types/node": "^6.0.37",
+    "@types/q": "^0.0.32",
+    "gulp": "^3.9.1",
+    "gulp-clang-format": "^1.0.23",
+    "jasmine": "^2.4.1",
+    "run-sequence": "^1.1.5",
+    "typescript": "^2.0.0"
+  }
+}
