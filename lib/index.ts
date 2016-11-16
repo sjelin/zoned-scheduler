@@ -1,58 +1,37 @@
-class Task<T> {
-  private fun: Function;
-  private asyncStyle: NaiveScheduler.AsyncStyle;
-  public promise: Promise<T>;
-  private resolve: (value: any) => void;  // `T | Thenable<T>` is hard to type
-  private reject: (error: any) => void;
+import 'zone.js';
 
-  constructor(fun: Function, asyncStyle: NaiveScheduler.AsyncStyle) {
-    this.fun = fun;
-    this.asyncStyle = asyncStyle != NaiveScheduler.AsyncStyle.INFER ?
-        asyncStyle :
-        fun.length == 0 ? NaiveScheduler.AsyncStyle.PROMISE : NaiveScheduler.AsyncStyle.TWO_CBS;
-    this.promise = new Promise<T>((resolve, reject) => {
-      this.resolve = resolve;
-      this.reject = reject;
-    });
-  }
+import {AsyncStyle} from './async_style';
+import {DEPTH_KEY, INSTANCE_KEY} from './consts';
+import {Task} from './task';
 
-  run(): Promise<void> {
-    process.nextTick(() => {
-      try {
-        switch (this.asyncStyle) {
-          case NaiveScheduler.AsyncStyle.PROMISE:
-            return this.fun().then(this.resolve, this.reject);
-          case NaiveScheduler.AsyncStyle.TWO_CBS:
-            return this.fun(this.resolve, this.reject);
-          case NaiveScheduler.AsyncStyle.DOT_FAIL:
-            (this.resolve as any).fail = this.reject;
-            return this.fun(this.resolve);
-          case NaiveScheduler.AsyncStyle.NODE:
-            return this.fun((error: any, value: any) => {
-              if (error == null) {
-                this.resolve(value);
-              } else {
-                this.reject(error);
-              }
-            });
-        }
-      } catch (e) {
-        this.reject(e);
-      }
-    });
-    return this.promise.then(() => {}, () => {});
-  }
-}
-
-
-class NaiveScheduler {
-  private tasks: Task<any>[];
-  private currentTask: number;
+export class Scheduler {
+  private tasks: Task<any>[][];  // TODO(sjelin): should be array of linked lists of tasks
   private promise: Promise<void>;
   private onComplete: () => void;
 
   constructor() {
     this.tasks = [];
+  }
+
+  /*
+   * Get the depth of the task currently being executed.  If no task is being
+   * executed, that is considered depth 0;
+   *
+   * @returns {number} The depth of the task currently being executed
+   */
+  private getCurrentDepth(): number {
+    let zone = Zone.current;
+    while (zone) {
+      zone = zone.getZoneWith(INSTANCE_KEY);
+      if (zone == null) {
+        return 0;
+      } else if (zone.get(INSTANCE_KEY) == this) {
+        return zone.get(DEPTH_KEY);
+      } else {
+        zone = zone.parent;
+      }
+    }
+    return 0;
   }
 
   /**
@@ -62,15 +41,19 @@ class NaiveScheduler {
    *
    * @param {Function} fun The function to schedule
    * @param {AsyncStyle=} asyncStyle Describes how the function singals when it is complete, if it
-   *     failed, and what value it'd like to return. @see NaiveScheduler.AsyncStyle for details.
+   *     failed, and what value it'd like to return. @see AsyncStyle for details.
    *
    * @returns {Promise.<T>} A promise which will resolve/reject to the function's value
    */
-  schedule<T>(fun: Function, asyncStyle = NaiveScheduler.AsyncStyle.INFER): Promise<T> {
-    var task = new Task<T>(fun, asyncStyle);
-    this.tasks.push(task);
+  schedule<T>(fun: Function, asyncStyle = AsyncStyle.INFER): Promise<T> {
+    let task = new Task<T>(fun, asyncStyle);
+    let depth = this.getCurrentDepth();
+    while (this.tasks.length <= depth) {
+      this.tasks.push([]);
+    }
+    this.tasks[depth].push(task);
 
-    if (this.currentTask == undefined) {
+    if (this.promise == undefined) {
       this.promise = new Promise<void>((resolve) => {
         this.onComplete = resolve;
       });
@@ -90,43 +73,36 @@ class NaiveScheduler {
       return this.promise;
     } else {
       return new Promise<void>((resolve) => {
-        process.nextTick(resolve);
+        setImmediate(resolve);
       });
     }
   }
 
-  private runNextTask(): void {
-    this.currentTask = (this.currentTask + 1) || 0;
-    if (this.currentTask >= this.tasks.length) {
-      this.tasks.length = 0;
-      this.currentTask = undefined;
-      this.onComplete();
-      this.promise = undefined;
-    } else {
-      this.tasks[this.currentTask].run().then(() => {
-        this.runNextTask();
-      });
-    }
-  }
-}
-
-module NaiveScheduler {
-  /**
-   * Flags to signifiy how a function implements asynchronous behavior
-   * @enum {number}
-   * @prop {number} PROMISE Function returns a promise
-   * @prop {number} TWO_CBS Function takes two callback functions, the first for success and the
-   *     second for failure.
-   * @prop {number} DOT_FAIL Function takes one callback function, which is used for success.  This
-   *     callback function has a property `fail`, which is the callback function for failure
-   * @prop {number} NODE Function takes one callback function.  If the first argument to that
-   *     callback funtion is `null` or `undefined`, that signifies success and the second argument
-   *     should be used for the return value.  If the first argument is something else, that
-   *     signifies failure and the first argument is the error to return.
-   * @prop {number} INFER Function may or may not take a callback function.  If it takes one or
-   *     more arguments, assume it uses `TWO_CBS` style.  Otherwise, it uses `NODE` style.
+  /* Runs the next task.  If all tasks have been run, calls onComplete() and re-initializes
    */
-  export enum AsyncStyle {PROMISE, TWO_CBS, DOT_FAIL, NODE, INFER = undefined}
+  private runNextTask(): void {
+    while (this.tasks.length && (this.tasks[this.tasks.length - 1].length == 0)) {
+      this.tasks.length--;
+    }
+    let depth = this.tasks.length;
+    if (depth) {
+      let task = this.tasks[depth - 1].shift();
+      let properties: {[key: string]: any} = {};
+      properties[INSTANCE_KEY] = this;
+      properties[DEPTH_KEY] = depth;
+      Zone.current.fork({name: 'Zoned Scheduler (Depth ' + depth + ')', properties: properties})
+          .run(() => {
+            task.run().then(() => {
+              this.runNextTask();
+            });
+          });
+    } else {
+      let onComplete = this.onComplete;
+      this.onComplete = null;
+      this.promise = null;
+      onComplete();
+    }
+  }
 }
 
-export = NaiveScheduler;
+export {AsyncStyle} from './async_style';
