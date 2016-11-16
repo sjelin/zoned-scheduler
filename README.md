@@ -1,9 +1,9 @@
-# Zone Scheduler
+# Zoned Scheduler
 
 This allows you to to schedule asynchronous functions to run in squence.
 
 ```js
-var scheduler = new require('naive-scheduler')();
+var scheduler = new require('zoned-scheduler')();
 var q = require('q');
 
 console.log('first');
@@ -46,7 +46,5 @@ scheduler.schedule(() => {
   console.log('sixth');
 });
 ```
-
-At the moment this only works for asynchronous activity done via Timers or Event Listeners.
 
 (See [`API.md`](./API.md) for a list of commands)
