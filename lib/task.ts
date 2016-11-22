@@ -1,14 +1,14 @@
 import {AsyncStyle} from './async_style';
 
 export class Task<T> {
-  private fun: Function;
-  private asyncStyle: AsyncStyle;
   public promise: Promise<T>;
+  public metadata: {noDeadlock?: boolean};
+
+  private asyncStyle: AsyncStyle;
   private resolve: (value: any) => void;  // `T | Thenable<T>` is hard to type
   private reject: (error: any) => void;
 
-  constructor(fun: Function, asyncStyle: AsyncStyle) {
-    this.fun = fun;
+  constructor(private fun: Function, asyncStyle: AsyncStyle) {
     this.asyncStyle = asyncStyle != AsyncStyle.INFER ?
         asyncStyle :
         fun.length == 0 ? AsyncStyle.PROMISE : AsyncStyle.TWO_CBS;
@@ -16,6 +16,7 @@ export class Task<T> {
       this.resolve = resolve;
       this.reject = reject;
     });
+    this.metadata = {};
   }
 
   run(): Promise<void> {

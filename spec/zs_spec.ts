@@ -75,4 +75,19 @@ describe('Naive Scheduler', () => {
       });
     });
   });
+
+  describe('noDeadlock', () => {
+    it('should handle the basic case for noDeadlock', (done) => {
+      let scheduler = new Scheduler();
+      scheduler.schedule(() => {
+        return scheduler.schedule(() => {
+          done();
+        });
+      }, AsyncStyle.INFER, true);
+    });
+  });
+
+  it('should ensure there are no pending errors', (done) => {
+    setTimeout(done, 200);
+  });
 });
