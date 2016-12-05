@@ -1,7 +1,7 @@
 import 'zone.js';
 
 import {AsyncStyle} from './async_style';
-import {DEPTH_KEY, INSTANCE_KEY} from './consts';
+import {DEPTH_KEY, INSTANCE_KEY, PASS_THROUGH_KEY} from './consts';
 import {Task} from './task';
 
 export class Scheduler {
@@ -14,24 +14,24 @@ export class Scheduler {
   }
 
   /*
-   * Get the depth of the task currently being executed.  If no task is being
-   * executed, that is considered depth 0;
+   * Get a property from the zone which scheduled the parent task.  If there is no parent task,
+   * or the parent task never set the property being queried for, return null.
    *
-   * @returns {number} The depth of the task currently being executed
+   * @returns {*} The property
    */
-  private getCurrentDepth(): number {
+  private getFromZone(key: string): any {
     let zone = Zone.current;
     while (zone) {
       zone = zone.getZoneWith(INSTANCE_KEY);
       if (zone == null) {
-        return 0;
+        return null;
       } else if (zone.get(INSTANCE_KEY) == this) {
-        return zone.get(DEPTH_KEY);
+        return zone.get(key);
       } else {
         zone = zone.parent;
       }
     }
-    return 0;
+    return null;
   }
 
   /**
@@ -42,17 +42,29 @@ export class Scheduler {
    * @param {Function} fun The function to schedule
    * @param {AsyncStyle=} asyncStyle Describes how the function singals when it is complete, if it
    *     failed, and what value it'd like to return. @see AsyncStyle for details.
+   * @param {boolean} noDeadlock Allow `fun` to block on a scheduled child task without deadlocking
    *
    * @returns {Promise.<T>} A promise which will resolve/reject to the function's value
    */
-  schedule<T>(fun: Function, asyncStyle = AsyncStyle.INFER): Promise<T> {
+  schedule<T>(fun: Function, asyncStyle = AsyncStyle.INFER, noDeadlock = false): Promise<T> {
+    // Check to see if we need to pass through to another scheduler
+    let passThroughTo: Scheduler = this.getFromZone(PASS_THROUGH_KEY);
+    if (passThroughTo != null) {
+      return passThroughTo.schedule<T>(fun, asyncStyle, noDeadlock);
+    }
+
+    // Add a new task to the queue
     let task = new Task<T>(fun, asyncStyle);
-    let depth = this.getCurrentDepth();
+    if (noDeadlock) {
+      task.metadata.noDeadlock = true;
+    }
+    let depth = this.getFromZone(DEPTH_KEY) || 0;
     while (this.tasks.length <= depth) {
       this.tasks.push([]);
     }
     this.tasks[depth].push(task);
 
+    // If no tasks are currently being executed, start executing
     if (this.promise == undefined) {
       this.promise = new Promise<void>((resolve) => {
         this.onComplete = resolve;
@@ -90,11 +102,20 @@ export class Scheduler {
       let properties: {[key: string]: any} = {};
       properties[INSTANCE_KEY] = this;
       properties[DEPTH_KEY] = depth;
+      if (task.metadata.noDeadlock) {
+        properties[PASS_THROUGH_KEY] = new Scheduler();
+      }
       Zone.current.fork({name: 'Zoned Scheduler (Depth ' + depth + ')', properties: properties})
           .run(() => {
-            task.run().then(() => {
-              this.runNextTask();
-            });
+            task.run()
+                .then(() => {
+                  if (task.metadata.noDeadlock) {
+                    return properties[PASS_THROUGH_KEY].complete();
+                  }
+                })
+                .then(() => {
+                  this.runNextTask();
+                });
           });
     } else {
       let onComplete = this.onComplete;
